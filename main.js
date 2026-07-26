@@ -8,7 +8,7 @@ const TronWeb = require('tronweb')
 const bcrypt = require('bcrypt');
 const fs = require('fs');
 const peers = require('./peers');
-const httpPort = 5500;
+const httpPort = 7199;
 const version = 2.2;
 const resolveConfFile = "/etc/resolv.conf"
 const serverConfFile = "/etc/openvpn/server/server.conf"
@@ -16,6 +16,7 @@ let Contract = null;
 let tronWeb = null;
 let smartAddress = "";
 const sleep = require('sleep-promise');
+
 
 startHttpServer();
 async function startHttpServer() {
@@ -38,10 +39,10 @@ async function startHttpServer() {
 
             if (req.method === "GET") {
                 switch (U.pathname.replace(/^\/|\/$/g, '')) {
-                    case "vpn/create" :
+                    case "create" :
                         await addVpn(req, res, U.query);
                         break;
-                    case "vpn/remove" :
+                    case "remove" :
                         await removeVpn(req, res, U.query);
                         break;
                      case "list" :
@@ -238,7 +239,7 @@ if (_result.code === 0) {
          res.write(fileContent)
  
 }else{
-    res.write('fail')
+    res.write('hello dfdsf')
 }  
 
   } else {
@@ -263,9 +264,24 @@ if (_result.code === 0) {
  
 }
       logger.info('oor is here')
+       
+
   }
+
+
+  
+
+    
 }
-// remove
+
+
+
+
+
+
+
+
+
 async function removeVpn(req, res, query){
 
  const result = shell.exec('/home/wire/wireguard-install.sh', { async: true });
@@ -330,3 +346,15 @@ async function listUser(req, res, query){
   logger.info('Console response:', _listuser);
   await res.write(_listuser)
 }
+ 
+
+
+ 
+
+
+
+
+
+
+
+

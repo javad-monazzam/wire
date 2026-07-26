@@ -1,76 +1,87 @@
 # Enable / disable peers
 
-Added in `peers.js`, wired into `main.js`.
+`wg0.conf` is never modified. Disabling removes the peer from the **running
+interface** only and records the name in `/etc/wireguard/disabled.json` — the
+same approach the WGDashboard panel uses.
 
 ## Routes
 
 | Route | Description |
 | --- | --- |
-| `GET /disable?publicKey=<name>` | Disconnect the client, keep its key and IP |
-| `GET /enable?publicKey=<name>` | Bring the same client back |
+| `GET /disable?publicKey=<name>` | Drop the client from the live interface |
+| `GET /enable?publicKey=<name>` | Put it back with the same key, PSK and IP |
 | `GET /status?publicKey=<name>` | On/off state of one client |
-| `GET /peers` | All clients with their state |
-
-`publicKey` is the *client name* here, matching how `/create` and `/remove`
-already use it. `name=` works as an alias.
+| `GET /peers` | All clients: state, IP, live connection |
 
 ```bash
-curl "http://127.0.0.1:7199/disable?publicKey=alice"
-# {"success":true,"name":"alice","enabled":false,"changed":true,"applied":true}
-
 curl "http://127.0.0.1:7199/peers"
-# {"success":true,"peers":[{"name":"alice","enabled":false},{"name":"bob","enabled":true}]}
+# {"success":true,"peers":[
+#   {"name":"turkish",  "enabled":false,"ip":"156.6.86.108","connected":false},
+#   {"name":"turkish34","enabled":true, "ip":"156.6.86.109","connected":true}]}
 ```
 
 `changed:false` means it was already in that state. `applied:false` means the
-interface was down, so only the file was updated — the change takes effect on
-the next `wg-quick up`.
+interface was down, so only the state file changed.
 
-Errors: `400` invalid name, `404` client not found, `500` command failed.
+## Why not comment the block out
 
-## How it works
+The first version prefixed disabled peer lines with `#!OFF!`. That corrupts the
+next client creation:
 
-WireGuard has no "disabled" state — a peer is either present or absent. So
-disabling comments out the peer block in `wg0.conf` with an `#!OFF!` prefix:
+1. `findIp()` in main.js only matches lines **starting with** `AllowedIPs`, so
+   `#!OFF!AllowedIPs = 156.6.86.108/32` is invisible and `.108` looks free.
+2. `wireguard-install.sh` greps the raw file (`grep -c "$CLIENT_WG_IPV4/32"`),
+   and grep still finds the commented line. It rejects the octet and re-prompts.
+3. stdin is already closed, so `read` returns empty and you get
+   `AllowedIPs = 156.6.86./32` — a broken client.
 
+Leaving the file untouched keeps `findIp()` and the install script in
+agreement. The IP also stays reserved automatically, since the peer block is
+still there in full.
+
+## Reboot
+
+`wg0.conf` still lists every peer, so `wg-quick up` reloads disabled ones too.
+`applyDisabled()` runs on `require('./peers')` — that is, whenever the panel
+starts — and strips them again. Nothing to configure.
+
+If you reboot and the panel does not come back up, disabled clients will be
+connectable until it does. If that matters, add to
+`/etc/systemd/system/jwpn.service`:
+
+```ini
+After=wg-quick@wg0.service
+Wants=wg-quick@wg0.service
 ```
-### Client alice          <- left untouched on purpose
-#!OFF![Peer]
-#!OFF!PublicKey = ...
-#!OFF!PresharedKey = ...
-#!OFF!AllowedIPs = 10.66.66.2/32
+
+## First run: clean up the old markers
+
+If the commenting version already ran, `wg0.conf` has `#!OFF!` lines in it:
+
+```bash
+sudo bash cleanup.sh
 ```
 
-The `### Client alice` header stays visible because options 2 (list) and 3
-(revoke) in `wireguard-install.sh` grep for exactly that line. Comment it out
-and a disabled user would vanish from the script's menu and become impossible
-to delete.
+It backs up the conf, strips every marker, writes the affected names into
+`disabled.json` so they stay disabled, and reports any client whose
+`AllowedIPs` the old bug corrupted. Those clients cannot be repaired — the
+address was never assigned — so delete and recreate them:
 
-The change is then pushed with `wg syncconf`, which only touches peers that
-actually changed — everyone else keeps their handshake and stays connected.
+```bash
+curl "http://127.0.0.1:7199/remove?publicKey=turkish34"
+curl "http://127.0.0.1:7199/create?publicKey=turkish34"
+```
 
-Because the state lives in `wg0.conf`, it survives a reboot.
+## Note on the API paths
 
-## Do not use `wg-quick save`
-
-`wg-quick save` rewrites `wg0.conf` from the live interface and drops every
-comment, which would erase all the `### Client` headers. `peers.js` writes the
-file itself and calls `wg syncconf` instead. If you add `wg-quick save`
-anywhere in this project, it will break both this feature and the install
-script.
+The NestJS service calls `/vpn/activate` and `/vpn/deactivate` on port 4500,
+while these routes are `/enable` and `/disable` on port 7199. One side needs to
+change or `toggleStatus` will always land in its catch block.
 
 ## Still outstanding
 
-These were left alone so this change stays minimal, but they are real:
-
-- **No authentication.** Anything that can reach port 7199 can create, delete,
-  or disable clients. Firewall the port to your panel's IP and add a token.
-- **Command injection in `addVpn`.** `query.publicKey` is concatenated into
-  `shell.exec('cat ' + filePath)`. The new routes validate their input with
-  `/^[a-zA-Z0-9_-]{1,15}$/`; `addVpn` does not.
-- **`findIp()` is broken.** It uses a callback with `await`, so `privateIP` is
-  set asynchronously and the `sleep(2222)` calls paper over the race. Two
-  concurrent `/create` calls can get the same IP.
-- **`vpn.log` was removed from this archive** — it contained 30 client configs
-  with real `PrivateKey` and `PresharedKey` values. Those peers should be
-  revoked and reissued, and the file purged from git history.
+- **No authentication** on port 7199. Firewall it to the panel's IP.
+- `vpn.log` was removed from this archive: it contained 30 client configs with
+  real `PrivateKey` and `PresharedKey` values. Revoke those peers and purge the
+  file from git history.
+- `SERVER_PRIV_KEY` was posted in a chat message. Rotate it.

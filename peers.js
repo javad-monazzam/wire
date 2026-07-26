@@ -1,16 +1,23 @@
 'use strict';
 
 /**
- * Enable / disable WireGuard peers without deleting them.
+ * Enable / disable WireGuard peers.
  *
- * A peer is "disabled" by commenting out its [Peer] block in wg0.conf with a
- * marker prefix, then re-syncing the live interface. The `### Client <name>`
- * header line is deliberately left untouched so that wireguard-install.sh's
- * list (2) and revoke (3) menu options keep working.
+ * wg0.conf is NEVER modified. Disabling a peer removes it from the *running*
+ * interface only (`wg set <nic> peer <key> remove`), exactly like the
+ * WGDashboard panel does, and records the client name in a sidecar file.
  *
- * We do NOT use `wg-quick save`: it rewrites wg0.conf from the live interface
- * and strips every comment, which would destroy the `### Client` headers the
- * install script depends on.
+ * Why not comment the block out in wg0.conf:
+ *   - main.js findIp() matches lines starting with "AllowedIPs", so a
+ *     commented line is invisible to it and its IP looks free.
+ *   - wireguard-install.sh greps the raw file, so it still sees that IP as
+ *     taken and re-prompts. stdin is already closed at that point, so the
+ *     octet ends up empty and you get "AllowedIPs = 156.6.86./32".
+ * Leaving the file untouched keeps both of them in agreement.
+ *
+ * Because wg0.conf still lists the peer, `wg-quick up` after a reboot would
+ * bring disabled clients back. applyDisabled() runs on require() and strips
+ * them again.
  */
 
 const { execFile } = require('child_process');
@@ -19,13 +26,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const OFF = '#!OFF!';
 const NAME_RE = /^[a-zA-Z0-9_-]{1,15}$/;
+const PARAMS_FILE = '/etc/wireguard/params';
+const STATE_FILE = '/etc/wireguard/disabled.json';
 
-// ---------------------------------------------------------------------------
-// Serialise every write. Two concurrent requests rewriting wg0.conf would
-// otherwise lose one of the two changes.
-// ---------------------------------------------------------------------------
+// Serialise writes so two requests can't clobber the state file.
 let queue = Promise.resolve();
 
 function withLock(fn) {
@@ -46,57 +51,104 @@ function run(cmd, args) {
     });
 }
 
-/** Read the interface name the installer chose (defaults to wg0). */
-async function getInterface() {
+// ---------------------------------------------------------------------------
+// params
+// ---------------------------------------------------------------------------
+
+async function getParams() {
+    const out = {};
     try {
-        const params = await fsp.readFile('/etc/wireguard/params', 'utf8');
-        const m = params.match(/^SERVER_WG_NIC=(.+)$/m);
-        if (m && m[1].trim()) return m[1].trim();
+        const text = await fsp.readFile(PARAMS_FILE, 'utf8');
+        for (const line of text.split('\n')) {
+            const m = line.match(/^\s*([A-Za-z0-9_]+)=(.*)$/);
+            if (m) out[m[1]] = m[2].trim();
+        }
     } catch (e) {
-        /* params file missing - fall through to default */
+        /* caller applies defaults */
     }
-    return 'wg0';
+    return out;
+}
+
+async function getInterface() {
+    const p = await getParams();
+    return p.SERVER_WG_NIC || 'wg0';
 }
 
 function confPath(nic) {
     return `/etc/wireguard/${nic}.conf`;
 }
 
+// ---------------------------------------------------------------------------
+// Read peers out of wg0.conf (read-only, never written)
+// ---------------------------------------------------------------------------
+
 /**
- * Locate a client's peer block.
- * @returns {{header:number, start:number, end:number}|null}
- *          header = index of the `### Client x` line,
- *          [start, end) = the body lines belonging to that peer.
+ * Parse every `### Client x` block.
+ * @returns {Promise<Array<{name,publicKey,presharedKey,allowedIPs}>>}
  */
-function findBlock(lines, name) {
-    const header = lines.findIndex(l => l.trim() === `### Client ${name}`);
-    if (header === -1) return null;
+async function readPeers() {
+    const nic = await getInterface();
+    const lines = (await fsp.readFile(confPath(nic), 'utf8')).split('\n');
+    const out = [];
+    let current = null;
 
-    let end = header + 1;
-    while (end < lines.length) {
-        const line = lines[end].trim();
-        if (line === '' || line.startsWith('### Client ')) break;
-        end++;
+    for (const raw of lines) {
+        const line = raw.trim();
+        const header = line.match(/^### Client (\S+)$/);
+
+        if (header) {
+            current = { name: header[1], publicKey: '', presharedKey: '', allowedIPs: '' };
+            out.push(current);
+            continue;
+        }
+        if (!current) continue;
+
+        let m;
+        if ((m = line.match(/^PublicKey\s*=\s*(.+)$/i))) current.publicKey = m[1].trim();
+        else if ((m = line.match(/^PresharedKey\s*=\s*(.+)$/i))) current.presharedKey = m[1].trim();
+        else if ((m = line.match(/^AllowedIPs\s*=\s*(.+)$/i))) current.allowedIPs = m[1].replace(/\s/g, '');
     }
-    return { header, start: header + 1, end };
+    return out;
 }
 
-function bodyIsDisabled(lines, block) {
-    for (let i = block.start; i < block.end; i++) {
-        if (lines[i].trim() === '') continue;
-        return lines[i].startsWith(OFF);
+async function findPeer(name) {
+    const peer = (await readPeers()).find(p => p.name === name);
+    if (!peer) {
+        const err = new Error('client not found');
+        err.code = 404;
+        throw err;
     }
-    return false;
+    if (!peer.publicKey) {
+        const err = new Error('client has no PublicKey in wg0.conf');
+        err.code = 500;
+        throw err;
+    }
+    return peer;
 }
 
-/** Write wg0.conf atomically, keeping 0600 permissions. */
-async function writeConf(file, text) {
-    const tmp = `${file}.tmp-${process.pid}`;
-    await fsp.writeFile(tmp, text, { mode: 0o600 });
-    await fsp.rename(tmp, file);
+// ---------------------------------------------------------------------------
+// Sidecar state: which clients are switched off
+// ---------------------------------------------------------------------------
+
+async function readState() {
+    try {
+        const parsed = JSON.parse(await fsp.readFile(STATE_FILE, 'utf8'));
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+        return [];   // missing or corrupt: treat as "nothing disabled"
+    }
 }
 
-/** Is the interface currently up? */
+async function writeState(names) {
+    const tmp = `${STATE_FILE}.tmp-${process.pid}`;
+    await fsp.writeFile(tmp, JSON.stringify([...new Set(names)].sort(), null, 2), { mode: 0o600 });
+    await fsp.rename(tmp, STATE_FILE);
+}
+
+// ---------------------------------------------------------------------------
+// Talking to the live interface
+// ---------------------------------------------------------------------------
+
 async function isUp(nic) {
     try {
         await run('wg', ['show', nic]);
@@ -106,28 +158,42 @@ async function isUp(nic) {
     }
 }
 
-/**
- * Push wg0.conf to the running interface.
- * `wg syncconf` only touches peers that actually changed, so other clients
- * keep their handshakes and stay connected.
- */
-async function syncConf(nic) {
-    if (!(await isUp(nic))) return false;
-
-    const stripped = await run('wg-quick', ['strip', nic]);
-    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'wgsync-'));
-    const tmp = path.join(dir, `${nic}.conf`);
-
+/** Public keys currently loaded in the running interface. */
+async function livePeerKeys(nic) {
     try {
-        await fsp.writeFile(tmp, stripped, { mode: 0o600 });
-        await run('wg', ['syncconf', nic, tmp]);
-    } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
+        const out = await run('wg', ['show', nic, 'peers']);
+        return new Set(out.split('\n').map(s => s.trim()).filter(Boolean));
+    } catch (e) {
+        return new Set();
     }
-    return true;
 }
 
-/** Flip one peer on or off. */
+async function removeFromInterface(nic, publicKey) {
+    await run('wg', ['set', nic, 'peer', publicKey, 'remove']);
+}
+
+async function addToInterface(nic, peer) {
+    if (peer.presharedKey) {
+        const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'wgpsk-'));
+        const pskFile = path.join(dir, 'psk');
+        try {
+            await fsp.writeFile(pskFile, peer.presharedKey, { mode: 0o600 });
+            await run('wg', ['set', nic, 'peer', peer.publicKey,
+                             'preshared-key', pskFile,
+                             'allowed-ips', peer.allowedIPs]);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    } else {
+        await run('wg', ['set', nic, 'peer', peer.publicKey,
+                         'allowed-ips', peer.allowedIPs]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 async function setEnabled(name, enabled) {
     if (!NAME_RE.test(name)) {
         const err = new Error('invalid client name');
@@ -137,32 +203,22 @@ async function setEnabled(name, enabled) {
 
     return withLock(async () => {
         const nic = await getInterface();
-        const file = confPath(nic);
-        const lines = (await fsp.readFile(file, 'utf8')).split('\n');
-        const block = findBlock(lines, name);
+        const peer = await findPeer(name);
+        const state = await readState();
+        const wasDisabled = state.includes(name);
 
-        if (!block) {
-            const err = new Error('client not found');
-            err.code = 404;
-            throw err;
-        }
-
-        const currentlyDisabled = bodyIsDisabled(lines, block);
-
-        // Already in the requested state - nothing to write.
-        if (enabled === !currentlyDisabled) {
+        if (enabled === !wasDisabled) {
             return { name, enabled, changed: false, applied: await isUp(nic) };
         }
 
-        for (let i = block.start; i < block.end; i++) {
-            if (lines[i].trim() === '') continue;
-            lines[i] = enabled
-                ? lines[i].slice(lines[i].startsWith(OFF) ? OFF.length : 0)
-                : OFF + lines[i];
+        let applied = false;
+        if (await isUp(nic)) {
+            if (enabled) await addToInterface(nic, peer);
+            else await removeFromInterface(nic, peer.publicKey);
+            applied = true;
         }
 
-        await writeConf(file, lines.join('\n'));
-        const applied = await syncConf(nic);
+        await writeState(enabled ? state.filter(n => n !== name) : state.concat(name));
 
         return { name, enabled, changed: true, applied };
     });
@@ -174,42 +230,63 @@ async function status(name) {
         err.code = 400;
         throw err;
     }
-
-    const nic = await getInterface();
-    const lines = (await fsp.readFile(confPath(nic), 'utf8')).split('\n');
-    const block = findBlock(lines, name);
-
-    if (!block) {
-        const err = new Error('client not found');
-        err.code = 404;
-        throw err;
-    }
-    return { name, enabled: !bodyIsDisabled(lines, block) };
+    await findPeer(name);
+    return { name, enabled: !(await readState()).includes(name) };
 }
 
-/** Every client with its on/off state. */
 async function list() {
+    const disabled = new Set(await readState());
     const nic = await getInterface();
-    const lines = (await fsp.readFile(confPath(nic), 'utf8')).split('\n');
-    const out = [];
+    const live = await livePeerKeys(nic);
 
-    for (let i = 0; i < lines.length; i++) {
-        const m = lines[i].trim().match(/^### Client (\S+)$/);
-        if (!m) continue;
-        const block = findBlock(lines, m[1]);
-        out.push({ name: m[1], enabled: !bodyIsDisabled(lines, block) });
-    }
-    return out;
+    return (await readPeers()).map(p => ({
+        name: p.name,
+        enabled: !disabled.has(p.name),
+        ip: (p.allowedIPs.split(',')[0] || '').split('/')[0] || null,
+        connected: live.has(p.publicKey),
+    }));
 }
+
+/**
+ * Re-apply the disabled list to the running interface.
+ *
+ * wg0.conf still contains every peer, so `wg-quick up` after a reboot loads
+ * the disabled ones too. This strips them again. Runs on require().
+ */
+async function applyDisabled() {
+    const disabled = await readState();
+    if (disabled.length === 0) return { removed: [] };
+
+    const nic = await getInterface();
+    if (!(await isUp(nic))) return { removed: [] };
+
+    const live = await livePeerKeys(nic);
+    const removed = [];
+
+    for (const peer of await readPeers()) {
+        if (!disabled.includes(peer.name)) continue;
+        if (!live.has(peer.publicKey)) continue;
+        try {
+            await removeFromInterface(nic, peer.publicKey);
+            removed.push(peer.name);
+        } catch (e) {
+            /* keep going: one bad peer shouldn't block the rest */
+        }
+    }
+    return { removed };
+}
+
+// Enforce the disabled list at startup.
+applyDisabled().catch(() => {});
 
 module.exports = {
     enable: name => setEnabled(name, true),
     disable: name => setEnabled(name, false),
     status,
     list,
+    applyDisabled,
+    getParams,
     getInterface,
-    // exported for tests
-    _findBlock: findBlock,
-    _bodyIsDisabled: bodyIsDisabled,
-    OFF,
+    readPeers,
+    NAME_RE,
 };
