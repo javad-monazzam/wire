@@ -8,7 +8,7 @@ const TronWeb = require('tronweb')
 const bcrypt = require('bcrypt');
 const fs = require('fs');
 const peers = require('./peers');
-const httpPort = 7199;
+const httpPort = 5500;
 const version = 2.2;
 const resolveConfFile = "/etc/resolv.conf"
 const serverConfFile = "/etc/openvpn/server/server.conf"
@@ -39,20 +39,18 @@ async function startHttpServer() {
 
             if (req.method === "GET") {
                 switch (U.pathname.replace(/^\/|\/$/g, '')) {
-                    case "create" :
+                    case "vpn/create" :
                         await addVpn(req, res, U.query);
                         break;
-                    case "remove" :
+                    case "vpn/remove" :
                         await removeVpn(req, res, U.query);
                         break;
                      case "list" :
                         await listUser(req, res, U.query);
                         break;
-
                     case "check" :
                         await checkToken(req,res,U.query);
                         break; 
-
                     case "enable" :
                         await setPeerState(res, U.query, true);
                         break;
