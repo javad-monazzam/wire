@@ -17,14 +17,15 @@ git clone https://github.com/javad-monazzam/wire.git
 cd wire
 chmod +x wireguard-install.sh
 npm i
+pm2 start main.js --name wire
+pm2 list
+pm2 save                # وضعیت فعلی pm2 را ذخیره کن
+pm2 startup systemd    
 ```
 اجازه به اسکریپت وایرگارد
 
 ```
 ./wireguard-install.sh
 
-pm2 start main.js --name wire
-pm2 list
-pm2 save                # وضعیت فعلی pm2 را ذخیره کن
-pm2 startup systemd      # دستوری که چاپ می‌شود را اجرا کن تا pm2 خودش بعد از ریبوت سرور هم بالا بیاید
+  # دستوری که چاپ می‌شود را اجرا کن تا pm2 خودش بعد از ریبوت سرور هم بالا بیاید
 
