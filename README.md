@@ -14,7 +14,7 @@ sudo apt-get install nodejs -y
 
 ```
 git clone https://github.com/javad-monazzam/wire.git
-
+cd wire
 npm i
 ```
 اجازه به اسکریپت وایرگارد
