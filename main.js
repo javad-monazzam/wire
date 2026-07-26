@@ -8,7 +8,7 @@ const TronWeb = require('tronweb')
 const bcrypt = require('bcrypt');
 const fs = require('fs');
 const peers = require('./peers');
-const httpPort = 7199;
+const httpPort = 5500;
 const version = 2.2;
 const resolveConfFile = "/etc/resolv.conf"
 const serverConfFile = "/etc/openvpn/server/server.conf"
@@ -16,7 +16,6 @@ let Contract = null;
 let tronWeb = null;
 let smartAddress = "";
 const sleep = require('sleep-promise');
-
 
 startHttpServer();
 async function startHttpServer() {
@@ -86,8 +85,19 @@ async function startHttpServer() {
 
     let privateIP ;
     async function findIp(){
-     
-      await fs.readFile('/etc/wireguard/wg0.conf', 'utf8', (err, data) => {
+
+      // خواندن ساب‌نت و نام اینترفیس از /etc/wireguard/params به جای هارد کد
+      const params = fs.readFileSync('/etc/wireguard/params', 'utf8');
+      const nic  = (params.match(/^SERVER_WG_NIC=(.+)$/m)  || [])[1];
+      const wgip = (params.match(/^SERVER_WG_IPV4=(.+)$/m) || [])[1];
+
+      if (!nic || !wgip) throw new Error('SERVER_WG_NIC / SERVER_WG_IPV4 not found in params');
+
+      // 156.6.86.1  ->  156.6.86
+      const baseIP = wgip.trim().split('.').slice(0, 3).join('.');
+      logger.info('subnet from params', baseIP + '.0/24', 'nic', nic.trim());
+
+      await fs.readFile(`/etc/wireguard/${nic.trim()}.conf`, 'utf8', (err, data) => {
       if (err) throw err;
     
       const allowedIPs = [];
@@ -112,7 +122,7 @@ async function startHttpServer() {
         const ipv4 = allowedIPs.filter(ip => ip.includes('.'));
         
         for(i = 3 ; i<250;i++){
-             const ipToCheck = `10.66.66.${i}/32`;
+             const ipToCheck = `${baseIP}.${i}/32`;
 
         if (allowedIPs.includes(ipToCheck)) {
           logger.info(`${ipToCheck} exists in the array.`);
@@ -262,15 +272,7 @@ if (_result.code === 0) {
 
     
 }
-
-
-
-
-
-
-
-
-
+// remove
 async function removeVpn(req, res, query){
 
  const result = shell.exec('/home/wire/wireguard-install.sh', { async: true });
@@ -335,15 +337,3 @@ async function listUser(req, res, query){
   logger.info('Console response:', _listuser);
   await res.write(_listuser)
 }
- 
-
-
- 
-
-
-
-
-
-
-
-
