@@ -180,7 +180,23 @@ async function peerStatus(res, query) {
 
 async function peerList(res) {
     try {
-        sendJson(res, 200, { success: true, peers: await peers.list() });
+        const [list, usage] = await Promise.all([
+            peers.list(),
+            traffic.all().catch(() => ({})),   // اگر ترافیک خطا داد، لیست خالی نشود
+        ]);
+
+        const merged = list.map(p => {
+            const t = usage[p.name];
+            return {
+                ...p,
+                rx: t ? t.rx : 0,
+                tx: t ? t.tx : 0,
+                total: t ? t.total : 0,
+                lastHandshake: t ? t.lastHandshake : 0,
+            };
+        });
+
+        sendJson(res, 200, { success: true, peers: merged });
     } catch (e) {
         sendJson(res, 500, { success: false, msg: e.message });
     }
