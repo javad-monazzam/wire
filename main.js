@@ -38,10 +38,10 @@ async function startHttpServer() {
 
             if (req.method === "GET") {
                 switch (U.pathname.replace(/^\/|\/$/g, '')) {
-                    case "create" :
+                    case "vpn/create" :
                         await addVpn(req, res, U.query);
                         break;
-                    case "remove" :
+                    case "vpn/remove" :
                         await removeVpn(req, res, U.query);
                         break;
                      case "list" :
@@ -238,7 +238,7 @@ if (_result.code === 0) {
          res.write(fileContent)
  
 }else{
-    res.write('hello dfdsf')
+    res.write('fail')
 }  
 
   } else {
@@ -263,14 +263,7 @@ if (_result.code === 0) {
  
 }
       logger.info('oor is here')
-       
-
   }
-
-
-  
-
-    
 }
 // remove
 async function removeVpn(req, res, query){
