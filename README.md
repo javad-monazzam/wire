@@ -17,7 +17,6 @@ git clone https://github.com/javad-monazzam/wire.git
 
 npm i
 ```
-```
 اجازه به اسکریپت وایرگارد
 ```
 chmod +x wireguard-install.sh
