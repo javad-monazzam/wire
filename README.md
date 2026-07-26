@@ -12,7 +12,7 @@ sudo apt-get install nodejs -y
 
 
 
-
+```
 git clone https://github.com/javad-monazzam/wire.git
 
 npm i
