@@ -201,7 +201,7 @@ async function addVpn(req, res, query){
 
   if (!file_is_exist) {
       
-      const result =await shell.exec('/home/jwpn/wireguard-install.sh', { async: true });
+      const result =await shell.exec('/home/wire/wireguard-install.sh', { async: true });
       result.stdin.write('1\n'); // Enter 1
       result.stdin.write(query.publicKey+'\n'); // Enter name 'ali'
       result.stdin.write(privateIP+'\n');
@@ -273,7 +273,7 @@ if (_result.code === 0) {
 
 async function removeVpn(req, res, query){
 
- const result = shell.exec('/home/jwpn/wireguard-install.sh', { async: true });
+ const result = shell.exec('/home/wire/wireguard-install.sh', { async: true });
 
   
   result.stdin.write('3\n'); // Enter 1
@@ -317,7 +317,7 @@ logger.on('close', (code) => {
 
 async function listUser(req, res, query){
 
- const result = shell.exec('/home/jwpn/wireguard-install.sh', { async: true });
+ const result = shell.exec('/home/wire/wireguard-install.sh', { async: true });
     let _listuser ;
   
   result.stdin.write('2\n'); // Enter 1

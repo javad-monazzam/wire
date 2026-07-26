@@ -17,10 +17,10 @@ sudo apt-get install nodejs -y
 
 
 
-git clone https://github.com/lokidv/jwpn.git
-mv jwpn/ /home
+git clone https://github.com/lokidv/wire.git
+mv wire/ /home
 cd /home
-cd jwpn
+cd wire
 
 
 
@@ -29,7 +29,7 @@ npm i
 
 chmod +x wireguard-install.sh
 ./wireguard-install.sh
-nano /etc/systemd/system/jwpn.service
+nano /etc/systemd/system/wire.service
 
 [Unit]
 Description=Tunnel WireGuard with udp2raw
@@ -38,13 +38,13 @@ After=network.target
 [Service]
 Type=simple
 User=root
-ExecStart=sudo node /home/jwpn/main.js
+ExecStart=sudo node /home/wire/main.js
 Restart=no
 
 [Install]
 WantedBy=multi-user.target
 
-systemctl enable --now jwpn.service 
+systemctl enable --now wire.service 
 
 
 you should upload install file to server
