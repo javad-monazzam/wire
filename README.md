@@ -15,12 +15,12 @@ sudo apt-get install nodejs -y
 ```
 git clone https://github.com/javad-monazzam/wire.git
 cd wire
+chmod +x wireguard-install.sh
 npm i
 ```
 اجازه به اسکریپت وایرگارد
 
 ```
-chmod +x wireguard-install.sh
 ./wireguard-install.sh
 
 pm2 start main.js --name wire
