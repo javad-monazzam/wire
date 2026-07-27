@@ -17,6 +17,7 @@ git clone https://github.com/javad-monazzam/wire.git
 cd wire
 chmod +x wireguard-install.sh
 npm i
+npm install -g pm2
 pm2 start main.js --name wire
 pm2 list
 pm2 save                # وضعیت فعلی pm2 را ذخیره کن
