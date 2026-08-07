@@ -13,6 +13,7 @@ sudo apt-get install nodejs -y
 
 
 ```
+cd /home
 git clone https://github.com/javad-monazzam/wire.git
 cd wire
 chmod +x wireguard-install.sh
