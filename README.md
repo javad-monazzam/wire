@@ -23,6 +23,12 @@ pm2 start main.js --name wire
 pm2 list
 pm2 save                # وضعیت فعلی pm2 را ذخیره کن
 pm2 startup systemd    
+
+
+nano /etc/sysctl.d/99-sysctl.conf
+
+systemctl enable --now wg-quick@wg0.service
+systemctl status wg-quick@wg0
 ```
 اجازه به اسکریپت وایرگارد
 
