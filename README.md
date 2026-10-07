@@ -24,16 +24,15 @@ pm2 list
 pm2 save                # وضعیت فعلی pm2 را ذخیره کن
 pm2 startup systemd    
 
-
-nano /etc/sysctl.d/99-sysctl.conf
-
-systemctl enable --now wg-quick@wg0.service
-systemctl status wg-quick@wg0
 ```
 اجازه به اسکریپت وایرگارد
 
 ```
 ./wireguard-install.sh
+nano /etc/sysctl.d/99-sysctl.conf
+
+systemctl enable --now wg-quick@wg0.service
+systemctl status wg-quick@wg0
 
   # دستوری که چاپ می‌شود را اجرا کن تا pm2 خودش بعد از ریبوت سرور هم بالا بیاید
 
